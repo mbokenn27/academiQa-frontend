@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/contexts/AuthContext'
-
+import { useWebSocket } from '@/hooks/useWebSocket'
 
 const API_BASE =
   (
@@ -47,75 +47,7 @@ const Toast = ({ title, description, variant }: { title: string; description: st
 }
 
 
-//WebSocket Hook with JWT Token Authentication
-const useWebSocketWithReconnect = (url: string | null, onMessage: (data: any) => void, deps: any[] = []) => {
-  const [ws, setWs] = useState<WebSocket | null>(null);
 
-  useEffect(() => {
-    if (!url) {
-      setWs(null);
-      return;
-    }
-
-    let reconnectTimeout: NodeJS.Timeout;
-    let attempt = 0;
-
-    const connect = () => {
-      const token = localStorage.getItem('access_token');
-      if (!token) {
-        console.warn('No access token — cannot connect to WebSocket');
-        return;
-      }
-
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}${url}?token=${encodeURIComponent(token)}`;
-
-      const websocket = new WebSocket(wsUrl);
-
-      websocket.onopen = () => {
-        console.log('WebSocket connected:', wsUrl);
-        setWs(websocket);
-        attempt = 0;
-      };
-
-      websocket.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          onMessage(data);
-        } catch (error) {
-          console.error('WebSocket parse error:', error);
-        }
-      };
-
-      websocket.onclose = () => {
-        console.log('WebSocket disconnected — reconnecting...');
-        setWs(null);
-        const delay = Math.min(1000 * (2 ** attempt), 30000);
-        attempt++;
-        reconnectTimeout = setTimeout(connect, delay);
-      };
-
-      websocket.onerror = () => {
-        console.error('WebSocket error');
-      };
-    };
-
-    connect();
-
-    return () => {
-      clearTimeout(reconnectTimeout);
-      if (ws?.readyState === WebSocket.OPEN) ws.close();
-    };
-  }, [url, ...deps]);
-
-  const sendMessage = (data: any) => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(data));
-    }
-  };
-
-  return { sendMessage };
-};
 
 // API service functions
 const apiService = {
@@ -222,7 +154,7 @@ export default function ClientDashboard() {
     setTimeout(() => setCurrentToast(null), 3000)
   }
   // WebSocket for client dashboard updates
-  const { sendMessage: sendClientMessage } = useWebSocketWithReconnect('/ws/client/', (data) => {
+  const { sendMessage: sendClientMessage } = useWebSocket('/ws/client/', (data) => {
     console.log('Client WebSocket message:', data);
    
     if (data.type === 'task_updated' && data.task) {
@@ -244,7 +176,7 @@ export default function ClientDashboard() {
   });
 
   // Task-specific WebSocket - reinitialize when selectedTask changes
-  const { sendMessage: sendTaskMessage } = useWebSocketWithReconnect(
+  const { sendMessage: sendTaskMessage } = useWebSocket(
     selectedTask ? `/ws/task/${selectedTask.id}/` : null,
     (data) => {
       console.log('Task WebSocket message:', data);
@@ -285,6 +217,8 @@ export default function ClientDashboard() {
     },
     [selectedTask?.id]
   );
+
+
   // Load initial data
   useEffect(() => {
     loadInitialData()
