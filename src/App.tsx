@@ -9,7 +9,7 @@ import ClientTaskList from "@/pages/ClientTaskList";
 import Tasks from "@/pages/Tasks";
 import Users from "@/pages/Users";
 import ErrorBoundary from "@/components/ui/ErrorBoundary";
-import { TaskProvider } from "@/context/TaskContext";
+import { TaskProvider } from "@/contexts/TaskContext";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 
 // Simple loading component
