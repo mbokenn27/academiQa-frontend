@@ -58,8 +58,16 @@ const useWebSocketWithReconnect = (url: string | null, onMessage: (data: any) =>
         return;
       }
 
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}${url}?token=${encodeURIComponent(token)}`;
+      // Prefer env WS base (e.g. wss://academiqa-backend-production.up.railway.app)
+      const ENV_WS_BASE =
+        (import.meta as any).env?.VITE_WS_BASE ||
+        `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`;
+
+      const base = ENV_WS_BASE.replace(/\/$/, '');
+      const path = url.startsWith('/') ? url : `/${url}`;
+      const wsUrl = `${base}${path}?token=${encodeURIComponent(token)}`;
+      console.log("[WS] connecting →", wsUrl);
+
 
       const websocket = new WebSocket(wsUrl);
 
@@ -109,56 +117,55 @@ const useWebSocketWithReconnect = (url: string | null, onMessage: (data: any) =>
 };
 
 // API service functions
+// === HTTP BASES (put this just above apiService) ===
+const API_ROOT = (import.meta.env.VITE_API_BASE || 'http://localhost:8000').replace(/\/+$/, '');
+const API_BASE = /\/api\/?$/.test(API_ROOT) ? API_ROOT : `${API_ROOT}/api`;
+
+// API service functions
 const apiService = {
   async get<T>(endpoint: string): Promise<T> {
-    const token = localStorage.getItem('access_token')
-    const response = await fetch(`http://localhost:8000${endpoint}`, {
+    const token = localStorage.getItem('access_token');
+    const url = `${API_BASE}${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
+    const response = await fetch(url, {
       headers: {
-        'Authorization': `Bearer ${token}`,
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
         'Content-Type': 'application/json',
       },
-    })
-   
-    if (!response.ok) {
-      throw new Error(`API error: ${response.status}`)
-    }
-   
-    return response.json()
+    });
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    return response.json();
   },
+
   async post<T>(endpoint: string, data?: any): Promise<T> {
-    const token = localStorage.getItem('access_token')
-    const response = await fetch(`http://localhost:8000${endpoint}`, {
+    const token = localStorage.getItem('access_token');
+    const url = `${API_BASE}${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${token}`,
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
         'Content-Type': 'application/json',
       },
-      body: data ? JSON.stringify(data) : undefined,
-    })
-   
-    if (!response.ok) {
-      throw new Error(`API error: ${response.status}`)
-    }
-   
-    return response.json()
+      body: data == null ? undefined : JSON.stringify(data),
+    });
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    return response.json();
   },
+
   async postFormData<T>(endpoint: string, formData: FormData): Promise<T> {
-    const token = localStorage.getItem('access_token')
-    const response = await fetch(`http://localhost:8000${endpoint}`, {
+    const token = localStorage.getItem('access_token');
+    const url = `${API_BASE}${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
+    const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
+      headers: token ? { 'Authorization': `Bearer ${token}` } : undefined, // let browser set boundary
       body: formData,
-    })
-   
-    if (!response.ok) {
-      throw new Error(`API error: ${response.status}`)
-    }
-   
-    return response.json()
+    });
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    return response.json();
   },
-}
+};
+
+
+
 // Timezone options
 const timezones = [
   { value: 'America/New_York', label: 'Eastern Time (ET)' },
@@ -294,10 +301,10 @@ export default function ClientDashboard() {
       setLoading(true)
      
       // Load current user
-      const userData = await apiService.get<any>('/api/auth/user/')
+      const userData = await apiService.get<any>('/auth/user/')
       setCurrentUser(userData)
       // Load tasks
-      const tasksData = await apiService.get<any[]>('/api/tasks/')
+      const tasksData = await apiService.get<any[]>('/tasks/')
       setTasks(tasksData)
       if (tasksData.length > 0) {
         setSelectedTask(tasksData[0])
@@ -312,7 +319,7 @@ export default function ClientDashboard() {
   }
   const loadChatMessages = async (taskId: number) => {
     try {
-      const messages = await apiService.get<any[]>(`/api/tasks/${taskId}/chat/`)
+      const messages = await apiService.get<any[]>(`/tasks/${taskId}/chat/`)
       setChatMessages(messages)
      
       setTimeout(() => {
@@ -382,9 +389,9 @@ const sendMessage = async () => {
       uploadedFiles.forEach(file => {
         formData.append('file', file);
       });
-      await apiService.postFormData(`/api/tasks/${selectedTask.id}/chat/`, formData);
+      await apiService.postFormData(`/tasks/${selectedTask.id}/chat/`, formData);
     } else {
-      await apiService.post(`/api/tasks/${selectedTask.id}/chat/`, {
+      await apiService.post(`/tasks/${selectedTask.id}/chat/`, {
         message: newMessage.trim(),
       });
     }
@@ -429,9 +436,12 @@ const sendMessage = async () => {
         uploadedFiles.forEach((file) => {
           formData.append('file', file);
         });
+
+
+        
       }
 
-      const newTask = await apiService.postFormData<any>('/api/tasks/', formData);
+      const newTask = await apiService.postFormData<any>('/tasks/', formData);
 
       setTasks(prev => [newTask, ...prev]);
       setSelectedTask(newTask);
@@ -459,7 +469,7 @@ const sendMessage = async () => {
     if (!selectedTask) return
    
     try {
-      const result = await apiService.post<{task: any, message: string}>(`/api/tasks/${selectedTask.id}/withdraw/`, {
+      const result = await apiService.post<{task: any, message: string}>(`/tasks/${selectedTask.id}/withdraw/`, {
         reason: withdrawalReason
       });
      
@@ -495,7 +505,7 @@ const sendMessage = async () => {
    
     try {
       if (action === 'accept') {
-        const result = await apiService.post<{task: any, message: string}>(`/api/tasks/${selectedTask.id}/accept-budget/`);
+        const result = await apiService.post<{task: any, message: string}>(`/tasks/${selectedTask.id}/accept-budget/`);
        
         setTasks(prev => prev.map(task =>
           task.id === selectedTask.id
@@ -535,7 +545,7 @@ const sendMessage = async () => {
           return;
         }
        
-        const result = await apiService.post<{task: any, message: string}>(`/api/tasks/${selectedTask.id}/counter-budget/`, {
+        const result = await apiService.post<{task: any, message: string}>(`//tasks/${selectedTask.id}/counter-budget/`, {
           amount: counterAmount
         });
        
@@ -562,7 +572,7 @@ const sendMessage = async () => {
         showToast("Success", result.message)
        
       } else if (action === 'reject') {
-        const result = await apiService.post<{task: any, message: string}>(`/api/tasks/${selectedTask.id}/reject-budget/`);
+        const result = await apiService.post<{task: any, message: string}>(`/tasks/${selectedTask.id}/reject-budget/`);
        
         setTasks(prev => prev.map(task =>
           task.id === selectedTask.id
@@ -595,7 +605,7 @@ const approveTask = async () => {
   if (!window.confirm("Approve and complete this assignment?")) return;
   try {
     setLoading(true);
-    const result = await apiService.post<{task: any, message: string}>(`/api/tasks/${selectedTask!.id}/approve/`);
+    const result = await apiService.post<{task: any, message: string}>(`/tasks/${selectedTask!.id}/approve/`);
     
     // Update state
     setTasks(prev => prev.map(task =>
@@ -673,7 +683,7 @@ const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         window.open(file.file_url, '_blank');
       } else {
         const token = localStorage.getItem('access_token');
-        const response = await fetch(`http://localhost:8000/api/files/${file.id}/download/`, {
+        const response = await fetch(`${API_BASE}/files/${file.id}/download/`, {
           headers: {
             'Authorization': `Bearer ${token}`,
           },
