@@ -1,3 +1,4 @@
+// path: client/src/pages/SignUp.tsx  ← ALIGNED (uses shared HTTP helper)
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useForm } from "react-hook-form";
@@ -5,15 +6,7 @@ import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-
-/** Build API base from env (Vite or CRA), with /api suffix */
-const API_BASE = (
-  (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_API_BASE) ||
-  (process.env.REACT_APP_API_BASE as string) ||
-  "https://academiqa-backend-production.up.railway.app"  // hard-coded fallback
-)
-  .replace(/\/+$/, "") + "/api";
-
+import { httpPost } from "@/lib/http"; // WHY: single source of truth for API base
 
 const signUpSchema = z
   .object({
@@ -41,9 +34,7 @@ export default function SignUp() {
     register,
     handleSubmit,
     formState: { errors },
-  } = useForm<SignUpForm>({
-    resolver: zodResolver(signUpSchema),
-  });
+  } = useForm<SignUpForm>({ resolver: zodResolver(signUpSchema) });
 
   const onSubmit = async (data: SignUpForm) => {
     setError("");
@@ -51,43 +42,30 @@ export default function SignUp() {
     setIsSubmitting(true);
 
     try {
-      const response = await fetch(`${API_BASE}/register/`, {
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          username: data.username,
-          email: data.email,
-          password: data.password,
-          first_name: data.first_name,
-          last_name: data.last_name,
-        }),
-      });
+      const payload = {
+        username: data.username,
+        email: data.email,
+        password: data.password,
+        first_name: data.first_name,
+        last_name: data.last_name,
+      };
 
-      const result = await response.json();
+      await httpPost("/register/", payload);
 
-      if (response.ok) {
-        setSuccess("Account created successfully! Redirecting to login...");
-        setTimeout(() => {
-          navigate("/login", { replace: true });
-        }, 2000);
-      } else {
-        if (result.username) {
-          setError(`Username: ${result.username[0]}`);
-        } else if (result.email) {
-          setError(`Email: ${result.email[0]}`);
-        } else if (result.password) {
-          setError(`Password: ${result.password[0]}`);
-        } else if (result.non_field_errors) {
-          setError(result.non_field_errors[0]);
-        } else {
-          setError(result.detail || "Registration failed. Please try again.");
-        }
+      setSuccess("Account created successfully! Redirecting to login...");
+      setTimeout(() => navigate("/login", { replace: true }), 2000);
+    } catch (e: any) {
+      // WHY: backend may return field-wise errors; surface the most helpful one
+      try {
+        const parsed = JSON.parse(e.message);
+        if (parsed?.username?.[0]) setError(`Username: ${parsed.username[0]}`);
+        else if (parsed?.email?.[0]) setError(`Email: ${parsed.email[0]}`);
+        else if (parsed?.password?.[0]) setError(`Password: ${parsed.password[0]}`);
+        else if (parsed?.non_field_errors?.[0]) setError(parsed.non_field_errors[0]);
+        else setError(parsed?.detail || "Registration failed. Please try again.");
+      } catch {
+        setError(e?.message || "Registration failed. Please try again.");
       }
-    } catch (err: any) {
-      console.error("Registration error:", err);
-      setError("Network error. Please check your connection and try again.");
     } finally {
       setIsSubmitting(false);
     }
@@ -101,11 +79,7 @@ export default function SignUp() {
           "url('https://images.unsplash.com/photo-1524995997946-a1c2e315a42f?auto=format&fit=crop&w=1920&q=80')",
       }}
     >
-
-      {/* Dark Overlay + Centered Form */}
       <div className="flex-1 flex items-center justify-center bg-black bg-opacity-60 px-4 py-12">
-        
-        {/* Smaller Form Card */}
         <div className="relative max-w-sm w-full bg-white bg-opacity-95 rounded-xl shadow-xl p-6 backdrop-blur-sm">
           <div className="text-center mb-6">
             <h6 className="text-2xl font-bold text-gray-900">Create Account</h6>
@@ -123,106 +97,49 @@ export default function SignUp() {
           )}
 
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-
-            {/* Name Fields */}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-semibold text-gray-700">First Name</label>
-                <Input
-                  {...register("first_name")}
-                  type="text"
-                  placeholder="John"
-                  className="mt-1"
-                />
-                {errors.first_name && (
-                  <p className="text-red-500 text-xs mt-1">{errors.first_name.message}</p>
-                )}
+                <Input {...register("first_name")} type="text" placeholder="John" className="mt-1" />
+                {errors.first_name && <p className="text-red-500 text-xs mt-1">{errors.first_name.message}</p>}
               </div>
-
               <div>
                 <label className="block text-sm font-semibold text-gray-700">Last Name</label>
-                <Input
-                  {...register("last_name")}
-                  type="text"
-                  placeholder="Doe"
-                  className="mt-1"
-                />
-                {errors.last_name && (
-                  <p className="text-red-500 text-xs mt-1">{errors.last_name.message}</p>
-                )}
+                <Input {...register("last_name")} type="text" placeholder="Doe" className="mt-1" />
+                {errors.last_name && <p className="text-red-500 text-xs mt-1">{errors.last_name.message}</p>}
               </div>
             </div>
 
-            {/* Username */}
             <div>
               <label className="block text-sm font-semibold text-gray-700">Username</label>
-              <Input
-                {...register("username")}
-                type="text"
-                placeholder="e.g., john_doe2025"
-                className="mt-1"
-              />
-              {errors.username && (
-                <p className="text-red-500 text-xs mt-1">{errors.username.message}</p>
-              )}
+              <Input {...register("username")} type="text" placeholder="e.g., john_doe2025" className="mt-1" />
+              {errors.username && <p className="text-red-500 text-xs mt-1">{errors.username.message}</p>}
             </div>
 
-            {/* Email */}
             <div>
               <label className="block text-sm font-semibold text-gray-700">Email Address</label>
-              <Input
-                {...register("email")}
-                type="email"
-                placeholder="you@example.com"
-                className="mt-1"
-              />
-              {errors.email && (
-                <p className="text-red-500 text-xs mt-1">{errors.email.message}</p>
-              )}
+              <Input {...register("email")} type="email" placeholder="you@example.com" className="mt-1" />
+              {errors.email && <p className="text-red-500 text-xs mt-1">{errors.email.message}</p>}
             </div>
 
-            {/* Password */}
             <div>
               <label className="block text-sm font-semibold text-gray-700">Password</label>
-              <Input
-                {...register("password")}
-                type="password"
-                placeholder="••••••••"
-                className="mt-1"
-              />
-              {errors.password && (
-                <p className="text-red-500 text-xs mt-1">{errors.password.message}</p>
-              )}
+              <Input {...register("password")} type="password" placeholder="••••••••" className="mt-1" />
+              {errors.password && <p className="text-red-500 text-xs mt-1">{errors.password.message}</p>}
             </div>
 
-            {/* Confirm Password */}
             <div>
               <label className="block text-sm font-semibold text-gray-700">Confirm Password</label>
-              <Input
-                {...register("confirmPassword")}
-                type="password"
-                placeholder="••••••••"
-                className="mt-1"
-              />
-              {errors.confirmPassword && (
-                <p className="text-red-500 text-xs mt-1">{errors.confirmPassword.message}</p>
-              )}
+              <Input {...register("confirmPassword")} type="password" placeholder="••••••••" className="mt-1" />
+              {errors.confirmPassword && <p className="text-red-500 text-xs mt-1">{errors.confirmPassword.message}</p>}
             </div>
 
-            {/* Submit */}
             <Button
               type="submit"
               disabled={isSubmitting}
               className="w-full h-12 text-lg font-bold bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-xl shadow-lg transform transition hover:scale-105 disabled:opacity-70"
             >
-              {isSubmitting ? (
-                <>
-                  <i className="ri-loader-4-line animate-spin mr-2"></i>
-                  Creating Account...
-                </>
-              ) : (
-                "Sign Up Free"
-              )}
+              {isSubmitting ? "Creating Account..." : "Sign Up Free"}
             </Button>
           </form>
 
