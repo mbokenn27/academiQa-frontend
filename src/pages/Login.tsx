@@ -1,4 +1,4 @@
-// path: client/src/pages/Login.tsx  ← ALIGNED WITH ENV-BASED HELPERS
+// src/pages/Login.tsx   ←  FINAL WORKING VERSION
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useForm } from "react-hook-form";
@@ -8,12 +8,12 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Loader2 } from "lucide-react";
-import { httpPost, API_BASE } from "@/lib/http"; // uses single source for base URL & headers
 
 const loginSchema = z.object({
   username: z.string().min(1, "Username is required"),
   password: z.string().min(1, "Password is required"),
 });
+
 type LoginForm = z.infer<typeof loginSchema>;
 
 export default function Login() {
@@ -32,29 +32,19 @@ export default function Login() {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-  } = useForm<LoginForm>({ resolver: zodResolver(loginSchema) });
+  } = useForm<LoginForm>({
+    resolver: zodResolver(loginSchema),
+  });
 
   const onSubmit = async (data: LoginForm) => {
     setError("");
     try {
-      await login(data); // sets tokens; user state may not be immediate
-
-      // Fetch fresh user to decide where to go (avoids relying on async state)
-      const res = await fetch(`${API_BASE}/api/auth/user/`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token") || ""}` },
-      });
-
-      // If backend ever returns HTML (404), show first chars instead of JSON parse crash
-      const text = await res.text();
-      let user: any = null;
-      try { user = JSON.parse(text); } catch {}
-
-      if (!res.ok) {
-        throw new Error(user?.detail || text.slice(0, 120) || "Login failed");
+      const loggedInUser = await login(data);
+      if (loggedInUser.role === "admin") {
+        navigate("/admin", { replace: true });
+      } else {
+        navigate("/client", { replace: true });
       }
-
-      const role = user?.profile?.role || user?.role || "client";
-      navigate(role === "admin" ? "/admin" : "/client", { replace: true });
     } catch (err: any) {
       setError(err.message || "Invalid username or password");
     }
@@ -64,11 +54,20 @@ export default function Login() {
     if (!email.includes("@")) return setError("Enter a valid email");
     setLoading(true); setError(""); setMessage("");
     try {
-      const data = await httpPost<{ detail?: string; error?: string }>("/auth/password-reset/", { email });
-      setMessage(data?.detail || "Check your email for the 6-digit code");
-      setStep("code");
-    } catch (e: any) {
-      setError(e?.message || "Failed to send code");
+      const res = await fetch("http://localhost:8000/api/auth/password-reset/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setMessage("Check your email for the 6-digit code");
+        setStep("code");
+      } else {
+        setError(data.error || "Failed to send code");
+      }
+    } catch {
+      setError("Network error");
     } finally {
       setLoading(false);
     }
@@ -78,10 +77,16 @@ export default function Login() {
     if (code.length !== 6) return setError("Enter full 6-digit code");
     setLoading(true); setError("");
     try {
-      await httpPost("/auth/password-reset-confirm/", { email, code });
-      setStep("newpassword");
-    } catch (e: any) {
-      setError(e?.message || "Invalid code");
+      const res = await fetch("http://localhost:8000/api/auth/password-reset-confirm/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, code }),
+      });
+      const data = await res.json();
+      if (res.ok) setStep("newpassword");
+      else setError(data.error || "Invalid code");
+    } catch {
+      setError("Network error");
     } finally {
       setLoading(false);
     }
@@ -91,12 +96,21 @@ export default function Login() {
     if (newPassword.length < 6) return setError("Password too short");
     setLoading(true); setError("");
     try {
-      await httpPost("/auth/password-reset-complete/", { email, code, new_password: newPassword });
-      setMessage("Password changed! You can now log in.");
-      setStep("login");
-      setEmail(""); setCode(""); setNewPassword("");
-    } catch (e: any) {
-      setError(e?.message || "Failed");
+      const res = await fetch("http://localhost:8000/api/auth/password-reset-complete/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, code, new_password: newPassword }),
+      });
+      if (res.ok) {
+        setMessage("Password changed! You can now log in.");
+        setStep("login");
+        setEmail(""); setCode(""); setNewPassword("");
+      } else {
+        const data = await res.json();
+        setError(data.error || "Failed");
+      }
+    } catch {
+      setError("Network error");
     } finally {
       setLoading(false);
     }
@@ -112,6 +126,8 @@ export default function Login() {
     >
       <div className="flex-1 flex items-center justify-center bg-black bg-opacity-60 px-4 py-12">
         <div className="relative max-w-sm w-full bg-white bg-opacity-95 rounded-xl shadow-xl p-6 backdrop-blur-sm">
+
+          {/* ====================== LOGIN ====================== */}
           {step === "login" && (
             <>
               <div className="text-center mb-6">
@@ -132,24 +148,13 @@ export default function Login() {
               <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
                 <div>
                   <label className="block text-sm font-semibold text-gray-700">Username</label>
-                  <Input
-                    {...register("username")}
-                    placeholder="Enter your username"
-                    className="mt-1"
-                    autoComplete="username"
-                  />
+                  <Input {...register("username")} placeholder="Enter your username" className="mt-1" />
                   {errors.username && <p className="text-red-500 text-xs mt-1">{errors.username.message}</p>}
                 </div>
 
                 <div>
                   <label className="block text-sm font-semibold text-gray-700">Password</label>
-                  <Input
-                    type="password"
-                    {...register("password")}
-                    placeholder="Enter your password"
-                    className="mt-1"
-                    autoComplete="current-password"
-                  />
+                  <Input type="password" {...register("password")} placeholder="Enter your password" className="mt-1" />
                   {errors.password && <p className="text-red-500 text-xs mt-1">{errors.password.message}</p>}
                 </div>
 
@@ -177,6 +182,7 @@ export default function Login() {
             </>
           )}
 
+          {/* ====================== STEP 1: Enter Email ====================== */}
           {step === "email" && (
             <>
               <h2 className="text-2xl font-bold text-center mb-6">Reset Password</h2>
@@ -188,7 +194,6 @@ export default function Login() {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="your@email.com"
                 className="mb-6"
-                autoComplete="email"
               />
 
               {error && <p className="text-red-600 text-sm text-center mb-4">{error}</p>}
@@ -205,6 +210,7 @@ export default function Login() {
             </>
           )}
 
+          {/* ====================== STEP 2: Enter Code ====================== */}
           {step === "code" && (
             <>
               <h2 className="text-2xl font-bold text-center mb-6">Enter Code</h2>
@@ -216,8 +222,6 @@ export default function Login() {
                 placeholder="000000"
                 className="text-center text-3xl tracking-widest font-mono mb-6"
                 maxLength={6}
-                inputMode="numeric"
-                autoComplete="one-time-code"
               />
 
               {error && <p className="text-red-600 text-sm text-center mb-4">{error}</p>}
@@ -233,6 +237,7 @@ export default function Login() {
             </>
           )}
 
+          {/* ====================== STEP 3: New Password ====================== */}
           {step === "newpassword" && (
             <>
               <h2 className="text-2xl font-bold text-center mb-6">Set New Password</h2>
@@ -243,7 +248,6 @@ export default function Login() {
                 onChange={(e) => setNewPassword(e.target.value)}
                 placeholder="Minimum 6 characters"
                 className="mb-6"
-                autoComplete="new-password"
               />
 
               {error && <p className="text-red-600 text-sm text-center mb-4">{error}</p>}

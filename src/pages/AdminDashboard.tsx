@@ -5,10 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/contexts/AuthContext'
-import { API_BASE, joinUrl } from "@/lib/http";
-import { useWebSocket } from "@/hooks/useWebSocket";
-import { resolveWsUrl } from "@/lib/ws";
-
+//import { useWebSocket } from '@/hooks/useWebSocket'
 
 // Simple toast hook replacement
 const useToast = () => {
@@ -142,45 +139,57 @@ interface AdminStats {
 
 // API service functions
 const apiService = {
-  buildUrl(endpoint: string) {
-    // tolerate callers passing "/api/..." – strip it because API_BASE already includes /api
-    const clean = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
-    return joinUrl(API_BASE, clean);
-  },
-  authHeaders(extra?: HeadersInit): HeadersInit {
-    const token = localStorage.getItem("access_token") || "";
-    return {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      "Content-Type": "application/json",
-      ...(extra || {}),
-    };
-  },
   async get<T>(endpoint: string): Promise<T> {
-    const res = await fetch(this.buildUrl(endpoint), { headers: this.authHeaders() });
-    if (!res.ok) throw new Error(`API error: ${res.status}`);
-    return res.json();
+    const token = localStorage.getItem('access_token')
+    const response = await fetch(`http://localhost:8000${endpoint}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    })
+    
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`)
+    }
+    
+    return response.json()
   },
-  async post<T = any>(endpoint: string, data?: any): Promise<T> {
-    const res = await fetch(this.buildUrl(endpoint), {
-      method: "POST",
-      headers: this.authHeaders(),
-      body: data == null ? undefined : JSON.stringify(data),
-    });
-    if (!res.ok) throw new Error(`API error: ${res.status}`);
-    return res.json();
-  },
-  async postFormData<T>(endpoint: string, formData: FormData): Promise<T> {
-    const token = localStorage.getItem("access_token") || "";
-    const res = await fetch(this.buildUrl(endpoint), {
-      method: "POST",
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined, // let browser set boundary
-      body: formData,
-    });
-    if (!res.ok) throw new Error(`API error: ${res.status}`);
-    return res.json();
-  },
-};
 
+  async post<T = any>(endpoint: string, data?: any): Promise<T> {  // <— T defaulted, response flexible
+    const token = localStorage.getItem('access_token')
+    const response = await fetch(`http://localhost:8000${endpoint}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: data ? JSON.stringify(data) : undefined,
+    })
+    
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`)
+    }
+    
+    return response.json()
+  },
+
+  async postFormData<T>(endpoint: string, formData: FormData): Promise<T> {
+    const token = localStorage.getItem('access_token')
+    const response = await fetch(`http://localhost:8000${endpoint}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+      body: formData,
+    })
+    
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`)
+    }
+    
+    return response.json()
+  },
+}
 
 // Timezone options
 const timezones = [
@@ -320,9 +329,7 @@ export default function AdminDashboard() {
   const typingTimeoutRef = useRef<NodeJS.Timeout>()
   
   // WebSocket for admin dashboard updates
-  const { sendMessage: sendAdminMessage } = useWebSocket(
-  resolveWsUrl("/admin/"),
-  (data) => {
+  const { sendMessage: sendAdminMessage } = useWebSocketWithReconnect('/ws/admin/', (data) => {
     console.log('Admin WS:', data);
 
     if (data.type === 'task_updated' && data.task) {
@@ -371,9 +378,9 @@ export default function AdminDashboard() {
   });
 
   // Task-specific WebSocket - reinitialize when selectedTask changes
-  const { sendMessage: sendTaskMessage } = useWebSocket(
-  selectedTask ? `/ws/task/${selectedTask.id}/` : null, 
-  (data) => {
+  const { sendMessage: sendTaskMessage } = useWebSocketWithReconnect(
+    selectedTask ? `/ws/task/${selectedTask.id}/` : null, 
+    (data) => {
       console.log('Task WebSocket message:', data);
       
       if (data.type === 'chat_message' && data.message) {
@@ -428,11 +435,11 @@ export default function AdminDashboard() {
       setLoading(true)
       
       // Load current user
-      const userData = await apiService.get<User>('/auth/user/')
+      const userData = await apiService.get<User>('/api/auth/user/')
       setCurrentUser(userData)
 
       // Load tasks
-      const tasksData = await apiService.get<Task[]>('/tasks/')
+      const tasksData = await apiService.get<Task[]>('/api/tasks/')
       setTasks(tasksData)
       if (tasksData.length > 0) {
         setSelectedTask(tasksData[0])
@@ -456,7 +463,7 @@ export default function AdminDashboard() {
       const statsData = await apiService.get<{
         task_stats: TaskStats
         admin_stats: AdminStats
-      }>('/admin/stats/')
+      }>('/api/admin/stats/')
       setTaskStats(statsData.task_stats)
       setAdminStats(statsData.admin_stats)
     } catch (error) {
@@ -466,7 +473,7 @@ export default function AdminDashboard() {
 
   const loadChatMessages = async (taskId: number) => {
     try {
-      const messages = await apiService.get<ChatMessage[]>(`/tasks/${taskId}/chat/`)
+      const messages = await apiService.get<ChatMessage[]>(`/api/tasks/${taskId}/chat/`)
       setChatMessages(messages)
       
       // Auto-scroll after loading messages
@@ -475,7 +482,7 @@ export default function AdminDashboard() {
       }, 100);
       // Optional: Mark as read
       try {
-        await apiService.post(`/tasks/${taskId}/mark-read/`);
+        await apiService.post(`/api/tasks/${taskId}/mark-read/`);
       } catch {}
     } catch (error) {
       console.error('Failed to load chat messages:', error)
@@ -559,10 +566,10 @@ export default function AdminDashboard() {
           formData.append('file', file);
         });
 
-        await apiService.postFormData(`/tasks/${selectedTask.id}/chat/`, formData);
+        await apiService.postFormData(`/api/tasks/${selectedTask.id}/chat/`, formData);
       } else {
         // For text-only messages
-        await apiService.post(`/tasks/${selectedTask.id}/chat/`, { 
+        await apiService.post(`/api/tasks/${selectedTask.id}/chat/`, { 
           message: newMessage.trim() 
         });
       }
@@ -593,7 +600,7 @@ export default function AdminDashboard() {
 
   const acceptTask = async (taskId: number) => {
     try {
-      await apiService.post(`/admin/tasks/${taskId}/accept/`)
+      await apiService.post(`/api/admin/tasks/${taskId}/accept/`)
       
       // The WebSocket will handle the real-time update
       showToast("Task Accepted", "Student has been notified via email.")
@@ -624,7 +631,7 @@ export default function AdminDashboard() {
     setSelectedTask(prev => (prev && prev.id === taskId ? optimisticTask : prev));
 
     try {
-      await apiService.post(`/admin/tasks/${taskId}/accept-budget/`);
+      await apiService.post(`/api/admin/tasks/${taskId}/accept-budget/`);
       
       showToast("Budget Accepted", "Work will begin shortly. Student has been notified via email.");
     } catch (error) {
@@ -655,7 +662,7 @@ export default function AdminDashboard() {
     setSelectedTask(updatedTask);
 
     try {
-      await apiService.post(`/admin/tasks/${selectedTask.id}/propose-budget/`, {
+      await apiService.post(`/api/admin/tasks/${selectedTask.id}/propose-budget/`, {
         amount: newBudget,
         reason: negotiationReason.trim()
       });
@@ -680,7 +687,7 @@ export default function AdminDashboard() {
     if (!selectedTask || !rejectReason.trim()) return
     
     try {
-      await apiService.post(`/admin/tasks/${selectedTask.id}/reject/`, {
+      await apiService.post(`/api/admin/tasks/${selectedTask.id}/reject/`, {
         reason: rejectReason
       })
       
@@ -696,7 +703,7 @@ export default function AdminDashboard() {
 
   const submitForReview = async (taskId: number) => {
     try {
-      await apiService.post(`/admin/tasks/${taskId}/submit-review/`)
+      await apiService.post(`/api/admin/tasks/${taskId}/submit-review/`)
       
       showToast("Submitted for Review", "Task has been submitted for student review.")
     } catch (error) {
@@ -707,7 +714,7 @@ export default function AdminDashboard() {
 
   const markComplete = async (taskId: number) => {
     try {
-      await apiService.post(`/admin/tasks/${taskId}/mark-complete/`)
+      await apiService.post(`/api/admin/tasks/${taskId}/mark-complete/`)
       
       // Reload stats to update earnings
       await loadStats();
@@ -722,7 +729,7 @@ export default function AdminDashboard() {
   const backToProgress = async (taskId: number) => {
     try {
       // Since there's no specific endpoint for this, we'll update progress
-      await apiService.post(`/admin/tasks/${taskId}/update-progress/`, {
+      await apiService.post(`/api/admin/tasks/${taskId}/update-progress/`, {
         progress: 80
       })
     } catch (error) {
@@ -737,7 +744,7 @@ export default function AdminDashboard() {
     try {
       const newProgress = Math.min(selectedTask.progress + 20, 95)
       
-      await apiService.post(`/admin/tasks/${selectedTask.id}/update-progress/`, {
+      await apiService.post(`/api/admin/tasks/${selectedTask.id}/update-progress/`, {
         progress: newProgress,
         message: progressUpdate
       })
@@ -980,7 +987,7 @@ export default function AdminDashboard() {
     });
 
     await apiService.postFormData(
-      `/admin/tasks/${selectedTask.id}/upload-solution/`,
+      `/api/admin/tasks/${selectedTask.id}/upload-solution/`,
       formData
     );
 
