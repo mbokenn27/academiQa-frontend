@@ -165,7 +165,6 @@ const apiService = {
 };
 
 
-
 // Timezone options
 const timezones = [
   { value: 'America/New_York', label: 'Eastern Time (ET)' },
@@ -416,53 +415,78 @@ const sendMessage = async () => {
     }
   };
 
-  const createTask = async (e: React.FormEvent) => {
-    e.preventDefault();
+const createTask = async (e: React.FormEvent) => {
+  e.preventDefault();
 
-    try {
-      const formData = new FormData();
+  // 1) Optimistic toast right away (no waiting)
+  showToast("Submitting…", "We're creating your assignment now.");
 
-      // Append all text fields
-      formData.append('title', taskForm.title);
-      formData.append('description', taskForm.description);
-      formData.append('subject', taskForm.subject);
-      formData.append('education_level', taskForm.education_level);
-      formData.append('deadline', taskForm.deadline);
-      formData.append('timezone_str', taskForm.timezone);
-      formData.append('proposed_budget', taskForm.budget);
+  // 2) Build the request payload
+  const formData = new FormData();
+  formData.append('title', taskForm.title);
+  formData.append('description', taskForm.description);
+  formData.append('subject', taskForm.subject);
+  formData.append('education_level', taskForm.education_level);
+  formData.append('deadline', taskForm.deadline);
+  formData.append('timezone_str', taskForm.timezone);
+  formData.append('proposed_budget', taskForm.budget);
+  uploadedFiles.forEach((file) => formData.append('file', file));
 
-      // Append files ONLY if present (optional)
-      if (uploadedFiles.length > 0) {
-        uploadedFiles.forEach((file) => {
-          formData.append('file', file);
-        });
-
-
-        
-      }
-
-      const newTask = await apiService.postFormData<any>('/tasks/', formData);
-
-      setTasks(prev => [newTask, ...prev]);
-      setSelectedTask(newTask);
-      setShowCreateTask(false);
-      setTaskForm({
-        title: '',
-        description: '',
-        subject: '',
-        education_level: '',
-        deadline: '',
-        timezone: 'America/New_York',
-        budget: ''
-      });
-      setUploadedFiles([]);
-
-      showToast("Success", "Task Submitted Successfully!");
-    } catch (error: any) {
-      console.error('Create task failed:', error);
-      showToast("Error", "Failed: " + (error.message || 'Please try again'), "destructive");
-    }
+  // 3) Optimistically add a temp task so UI feels instant
+  const tempId = Date.now();
+  const optimisticTask = {
+    id: tempId,
+    title: taskForm.title,
+    description: taskForm.description,
+    subject: taskForm.subject,
+    education_level: taskForm.education_level,
+    deadline: taskForm.deadline,
+    timezone_str: taskForm.timezone,
+    proposed_budget: taskForm.budget,
+    status: 'submitted',
+    negotiation_status: 'pending_admin_review',
+    files: [],
+    revisions: [],
+    chat: [],
   };
+
+  setTasks(prev => [optimisticTask, ...prev]);
+  setSelectedTask(optimisticTask);
+  setShowCreateTask(false); // close immediately for snappy UX
+
+  try {
+    const newTask = await apiService.postFormData<any>('/api/tasks/', formData);
+
+    // 4) Reconcile optimistic task with the real one
+    setTasks(prev => prev.map(t => (t.id === tempId ? newTask : t)));
+    setSelectedTask(newTask);
+
+    // Success toast
+    showToast("Success", "Task submitted successfully!");
+  } catch (error: any) {
+    // Rollback optimistic task on error
+    setTasks(prev => prev.filter(t => t.id !== tempId));
+    if (selectedTask?.id === tempId) setSelectedTask(null);
+
+    showToast("Error", "Failed: " + (error.message || "Please try again"), "destructive");
+
+    // Reopen the modal so user can retry / edit
+    setShowCreateTask(true);
+  } finally {
+    // Reset form regardless
+    setTaskForm({
+      title: '',
+      description: '',
+      subject: '',
+      education_level: '',
+      deadline: '',
+      timezone: 'America/New_York',
+      budget: ''
+    });
+    setUploadedFiles([]);
+  }
+};
+
 
 
   const withdrawTask = async () => {
@@ -885,7 +909,7 @@ const requestRevision = async () => {
       
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Enhanced Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-6 mb-8">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 md:gap-6 mb-8">
           <div className="bg-white rounded-2xl p-6 shadow-xl border border-gray-100 hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-1">
             <div className="flex items-center justify-between">
               <div>
@@ -1378,7 +1402,7 @@ const requestRevision = async () => {
                   </div>
                  
                   {/* Messages */}
-                  <div className="bg-gray-50 rounded-2xl border border-gray-200 h-96 flex flex-col">
+                  <div className="bg-gray-50 rounded-2xl border border-gray-200 h-[50vh] md:h-96 flex flex-col">
                     <div className="flex-1 overflow-y-auto p-4 space-y-4">
                       {chatMessages.length === 0 ? (
                         <div className="text-center text-gray-500 py-12">
@@ -1535,7 +1559,7 @@ const requestRevision = async () => {
       {/* Enhanced Create Task Modal - RESIZED */}
       {showCreateTask && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
-          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl animate-slide-up max-h-[85vh] overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl animate-slide-up max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-2xl font-bold text-gray-900">Submit New Assignment</h2>
               <button onClick={() => setShowCreateTask(false)} className="w-10 h-10 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors cursor-pointer">
