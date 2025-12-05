@@ -8,7 +8,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Loader2 } from "lucide-react";
-import { httpPost } from "@/lib/http"; // WHY: single source for base URL & headers
+import { httpPost, API_BASE } from "@/lib/http"; // uses single source for base URL & headers
 
 const loginSchema = z.object({
   username: z.string().min(1, "Username is required"),
@@ -37,9 +37,24 @@ export default function Login() {
   const onSubmit = async (data: LoginForm) => {
     setError("");
     try {
-      const loggedInUser = await login(data);
-      if ((loggedInUser as any)?.role === "admin") navigate("/admin", { replace: true });
-      else navigate("/client", { replace: true });
+      await login(data); // sets tokens; user state may not be immediate
+
+      // Fetch fresh user to decide where to go (avoids relying on async state)
+      const res = await fetch(`${API_BASE}/auth/user/`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("access_token") || ""}` },
+      });
+
+      // If backend ever returns HTML (404), show first chars instead of JSON parse crash
+      const text = await res.text();
+      let user: any = null;
+      try { user = JSON.parse(text); } catch {}
+
+      if (!res.ok) {
+        throw new Error(user?.detail || text.slice(0, 120) || "Login failed");
+      }
+
+      const role = user?.profile?.role || user?.role || "client";
+      navigate(role === "admin" ? "/admin" : "/client", { replace: true });
     } catch (err: any) {
       setError(err.message || "Invalid username or password");
     }
@@ -117,13 +132,24 @@ export default function Login() {
               <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
                 <div>
                   <label className="block text-sm font-semibold text-gray-700">Username</label>
-                  <Input {...register("username")} placeholder="Enter your username" className="mt-1" />
+                  <Input
+                    {...register("username")}
+                    placeholder="Enter your username"
+                    className="mt-1"
+                    autoComplete="username"
+                  />
                   {errors.username && <p className="text-red-500 text-xs mt-1">{errors.username.message}</p>}
                 </div>
 
                 <div>
                   <label className="block text-sm font-semibold text-gray-700">Password</label>
-                  <Input type="password" {...register("password")} placeholder="Enter your password" className="mt-1" />
+                  <Input
+                    type="password"
+                    {...register("password")}
+                    placeholder="Enter your password"
+                    className="mt-1"
+                    autoComplete="current-password"
+                  />
                   {errors.password && <p className="text-red-500 text-xs mt-1">{errors.password.message}</p>}
                 </div>
 
@@ -162,6 +188,7 @@ export default function Login() {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="your@email.com"
                 className="mb-6"
+                autoComplete="email"
               />
 
               {error && <p className="text-red-600 text-sm text-center mb-4">{error}</p>}
@@ -189,6 +216,8 @@ export default function Login() {
                 placeholder="000000"
                 className="text-center text-3xl tracking-widest font-mono mb-6"
                 maxLength={6}
+                inputMode="numeric"
+                autoComplete="one-time-code"
               />
 
               {error && <p className="text-red-600 text-sm text-center mb-4">{error}</p>}
@@ -214,6 +243,7 @@ export default function Login() {
                 onChange={(e) => setNewPassword(e.target.value)}
                 placeholder="Minimum 6 characters"
                 className="mb-6"
+                autoComplete="new-password"
               />
 
               {error && <p className="text-red-600 text-sm text-center mb-4">{error}</p>}
