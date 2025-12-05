@@ -5,16 +5,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/contexts/AuthContext'
+import { API_BASE, joinUrl } from "@/lib/http";
+import { useWebSocket } from "@/hooks/useWebSocket"; // use the same WS hook as client
+
 //import { useWebSocket } from '@/hooks/useWebSocket'
-
-
-const API_BASE =
-  (
-    (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_API_BASE) ||
-    (process.env.REACT_APP_API_BASE as string) ||
-    window.location.origin
-  ).replace(/\/+$/, "");
-
 
 
 // Simple toast hook replacement
@@ -149,57 +143,45 @@ interface AdminStats {
 
 // API service functions
 const apiService = {
+  buildUrl(endpoint: string) {
+    // tolerate callers passing "/api/..." – strip it because API_BASE already includes /api
+    const clean = (endpoint || "").replace(/^\/api\//i, "/");
+    return joinUrl(API_BASE, clean);
+  },
+  authHeaders(extra?: HeadersInit): HeadersInit {
+    const token = localStorage.getItem("access_token") || "";
+    return {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      "Content-Type": "application/json",
+      ...(extra || {}),
+    };
+  },
   async get<T>(endpoint: string): Promise<T> {
-    const token = localStorage.getItem('access_token')
-    const response = await fetch(`${API_BASE}${endpoint}`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-    })
-    
-    if (!response.ok) {
-      throw new Error(`API error: ${response.status}`)
-    }
-    
-    return response.json()
+    const res = await fetch(this.buildUrl(endpoint), { headers: this.authHeaders() });
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    return res.json();
   },
-
-  async post<T = any>(endpoint: string, data?: any): Promise<T> {  // <— T defaulted, response flexible
-    const token = localStorage.getItem('access_token')
-    const response = await fetch(`${API_BASE}${endpoint}`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: data ? JSON.stringify(data) : undefined,
-    })
-    
-    if (!response.ok) {
-      throw new Error(`API error: ${response.status}`)
-    }
-    
-    return response.json()
+  async post<T = any>(endpoint: string, data?: any): Promise<T> {
+    const res = await fetch(this.buildUrl(endpoint), {
+      method: "POST",
+      headers: this.authHeaders(),
+      body: data == null ? undefined : JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    return res.json();
   },
-
   async postFormData<T>(endpoint: string, formData: FormData): Promise<T> {
-    const token = localStorage.getItem('access_token')
-    const response = await fetch(`${API_BASE}${endpoint}`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
+    const token = localStorage.getItem("access_token") || "";
+    const res = await fetch(this.buildUrl(endpoint), {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined, // let browser set boundary
       body: formData,
-    })
-    
-    if (!response.ok) {
-      throw new Error(`API error: ${response.status}`)
-    }
-    
-    return response.json()
+    });
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    return res.json();
   },
-}
+};
+
 
 // Timezone options
 const timezones = [
@@ -339,7 +321,7 @@ export default function AdminDashboard() {
   const typingTimeoutRef = useRef<NodeJS.Timeout>()
   
   // WebSocket for admin dashboard updates
-  const { sendMessage: sendAdminMessage } = useWebSocketWithReconnect('/ws/admin/', (data) => {
+  const { sendMessage: sendAdminMessage } = useWebSocket('/ws/admin/', (data) => {
     console.log('Admin WS:', data);
 
     if (data.type === 'task_updated' && data.task) {
@@ -388,7 +370,7 @@ export default function AdminDashboard() {
   });
 
   // Task-specific WebSocket - reinitialize when selectedTask changes
-  const { sendMessage: sendTaskMessage } = useWebSocketWithReconnect(
+  const { sendMessage: sendTaskMessage } = useWebSocket(
     selectedTask ? `/ws/task/${selectedTask.id}/` : null, 
     (data) => {
       console.log('Task WebSocket message:', data);

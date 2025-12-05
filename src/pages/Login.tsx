@@ -1,4 +1,4 @@
-// src/pages/Login.tsx   ←  FINAL WORKING VERSION (env-based API)
+// path: client/src/pages/Login.tsx  ← ALIGNED WITH ENV-BASED HELPERS
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useForm } from "react-hook-form";
@@ -8,15 +8,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Loader2 } from "lucide-react";
-
-/** Build API base from env (Vite or CRA), with /api suffix */
-const API_BASE =
-  (
-    (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_API_BASE) ||
-    (process.env.REACT_APP_API_BASE as string) ||
-    window.location.origin
-  )
-    .replace(/\/+$/, "") + "/api";
+import { httpPost } from "@/lib/http"; // WHY: single source for base URL & headers
 
 const loginSchema = z.object({
   username: z.string().min(1, "Username is required"),
@@ -57,20 +49,11 @@ export default function Login() {
     if (!email.includes("@")) return setError("Enter a valid email");
     setLoading(true); setError(""); setMessage("");
     try {
-      const res = await fetch(`${API_BASE}/auth/password-reset/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setMessage("Check your email for the 6-digit code");
-        setStep("code");
-      } else {
-        setError(data?.error || "Failed to send code");
-      }
-    } catch {
-      setError("Network error");
+      const data = await httpPost<{ detail?: string; error?: string }>("/auth/password-reset/", { email });
+      setMessage(data?.detail || "Check your email for the 6-digit code");
+      setStep("code");
+    } catch (e: any) {
+      setError(e?.message || "Failed to send code");
     } finally {
       setLoading(false);
     }
@@ -80,16 +63,10 @@ export default function Login() {
     if (code.length !== 6) return setError("Enter full 6-digit code");
     setLoading(true); setError("");
     try {
-      const res = await fetch(`${API_BASE}/auth/password-reset-confirm/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, code }),
-      });
-      const data = await res.json();
-      if (res.ok) setStep("newpassword");
-      else setError(data?.error || "Invalid code");
-    } catch {
-      setError("Network error");
+      await httpPost("/auth/password-reset-confirm/", { email, code });
+      setStep("newpassword");
+    } catch (e: any) {
+      setError(e?.message || "Invalid code");
     } finally {
       setLoading(false);
     }
@@ -99,21 +76,12 @@ export default function Login() {
     if (newPassword.length < 6) return setError("Password too short");
     setLoading(true); setError("");
     try {
-      const res = await fetch(`${API_BASE}/auth/password-reset-complete/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, code, new_password: newPassword }),
-      });
-      if (res.ok) {
-        setMessage("Password changed! You can now log in.");
-        setStep("login");
-        setEmail(""); setCode(""); setNewPassword("");
-      } else {
-        const data = await res.json();
-        setError(data?.error || "Failed");
-      }
-    } catch {
-      setError("Network error");
+      await httpPost("/auth/password-reset-complete/", { email, code, new_password: newPassword });
+      setMessage("Password changed! You can now log in.");
+      setStep("login");
+      setEmail(""); setCode(""); setNewPassword("");
+    } catch (e: any) {
+      setError(e?.message || "Failed");
     } finally {
       setLoading(false);
     }

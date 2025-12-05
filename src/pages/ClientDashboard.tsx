@@ -1,3 +1,4 @@
+// path: src/pages/ClientDashboard.tsx   ← UPDATED TO USE SHARED HTTP BASE
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
@@ -5,14 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/contexts/AuthContext'
 import { useWebSocket } from '@/hooks/useWebSocket'
-
-const API_BASE =
-  (
-    (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_API_BASE) ||
-    (process.env.REACT_APP_API_BASE as string) ||
-    window.location.origin
-  ).replace(/\/+$/, "") + "/api";
-
+import { API_BASE, joinUrl } from "@/lib/http"  // WHY: single source of truth for API base/joins
 
 // Simple toast hook replacement
 const useToast = () => {
@@ -21,24 +15,15 @@ const useToast = () => {
     setToast({ title, description, variant })
     setTimeout(() => setToast(null), 3000)
   }
-  return {
-    toast: showToast
-  }
+  return { toast: showToast }
 }
-// Toast Component
+
 // Toast Component
 const Toast = ({ title, description, variant }: { title: string; description: string; variant?: string }) => {
   const bgColor = variant === 'destructive' ? 'bg-red-500' : 'bg-green-500'
- 
   return (
     <div
-      className={`
-        fixed top-4 right-4
-        ${bgColor}
-        text-white p-4 rounded-lg shadow-lg
-        z-[9999] pointer-events-none
-        max-w-sm
-      `}
+      className={`fixed top-4 right-4 ${bgColor} text-white p-4 rounded-lg shadow-lg z-[9999] pointer-events-none max-w-sm`}
     >
       <div className="font-bold">{title}</div>
       <div className="text-sm">{description}</div>
@@ -46,61 +31,46 @@ const Toast = ({ title, description, variant }: { title: string; description: st
   )
 }
 
-
-
-
-// API service functions
+// API service functions (normalized to avoid /api/api and localhost in prod)
 const apiService = {
-  async get<T>(endpoint: string): Promise<T> {
-    const token = localStorage.getItem('access_token')
-    const response = await fetch(`${API_BASE}${endpoint}`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-    })
-   
-    if (!response.ok) {
-      throw new Error(`API error: ${response.status}`)
+  buildUrl(endpoint: string) {
+    const clean = (endpoint || "").replace(/^\/api\//i, "/") // WHY: tolerate callers passing '/api/...'
+    return joinUrl(API_BASE, clean)
+  },
+  authHeaders(extra?: HeadersInit): HeadersInit {
+    const token = localStorage.getItem('access_token') || ""
+    return {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      "Content-Type": "application/json",
+      ...(extra || {}),
     }
-   
-    return response.json()
+  },
+  async get<T>(endpoint: string): Promise<T> {
+    const res = await fetch(this.buildUrl(endpoint), { headers: this.authHeaders() })
+    if (!res.ok) throw new Error(`API error: ${res.status}`)
+    return res.json()
   },
   async post<T>(endpoint: string, data?: any): Promise<T> {
-    const token = localStorage.getItem('access_token')
-    const response = await fetch(`${API_BASE}${endpoint}`, {
+    const res = await fetch(this.buildUrl(endpoint), {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: data ? JSON.stringify(data) : undefined,
+      headers: this.authHeaders(),
+      body: data == null ? undefined : JSON.stringify(data),
     })
-   
-    if (!response.ok) {
-      throw new Error(`API error: ${response.status}`)
-    }
-   
-    return response.json()
+    if (!res.ok) throw new Error(`API error: ${res.status}`)
+    return res.json()
   },
   async postFormData<T>(endpoint: string, formData: FormData): Promise<T> {
-    const token = localStorage.getItem('access_token')
-    const response = await fetch(`${API_BASE}${endpoint}`, {
+    const token = localStorage.getItem('access_token') || ""
+    const res = await fetch(this.buildUrl(endpoint), {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined, // WHY: let browser set multipart boundary
       body: formData,
     })
-   
-    if (!response.ok) {
-      throw new Error(`API error: ${response.status}`)
-    }
-   
-    return response.json()
+    if (!res.ok) throw new Error(`API error: ${res.status}`)
+    return res.json()
   },
 }
-// Timezone options
+
 const timezones = [
   { value: 'America/New_York', label: 'Eastern Time (ET)' },
   { value: 'America/Chicago', label: 'Central Time (CT)' },
@@ -113,6 +83,7 @@ const timezones = [
   { value: 'Asia/Kolkata', label: 'India Standard Time (IST)' },
   { value: 'Australia/Sydney', label: 'Australian Eastern Time (AET)' }
 ]
+
 export default function ClientDashboard() {
   const navigate = useNavigate()
   const { logout, user } = useAuth()
@@ -138,7 +109,7 @@ export default function ClientDashboard() {
   const chatEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const typingTimeoutRef = useRef<NodeJS.Timeout>()
-  // Create task form state
+
   const [taskForm, setTaskForm] = useState({
     title: '',
     description: '',
@@ -148,103 +119,59 @@ export default function ClientDashboard() {
     timezone: 'America/New_York',
     budget: ''
   })
-  // Custom toast function
+
   const showToast = (title: string, description: string, variant?: string) => {
     setCurrentToast({ title, description, variant })
     setTimeout(() => setCurrentToast(null), 3000)
   }
+
   // WebSocket for client dashboard updates
   const { sendMessage: sendClientMessage } = useWebSocket('/ws/client/', (data) => {
-    console.log('Client WebSocket message:', data);
-   
     if (data.type === 'task_updated' && data.task) {
-      setTasks(prev => prev.map(task =>
-        task.id === data.task.id ? { ...task, ...data.task } : task
-      ));
-     
-      if (selectedTask && selectedTask.id === data.task.id) {
-        setSelectedTask(prev => ({ ...prev, ...data.task }));
-      }
-     
-      showToast("Task Updated", "Task has been updated in real-time");
+      setTasks(prev => prev.map(task => task.id === data.task.id ? { ...task, ...data.task } : task))
+      if (selectedTask && selectedTask.id === data.task.id) setSelectedTask(prev => ({ ...prev!, ...data.task }))
+      showToast("Task Updated", "Task has been updated in real-time")
     }
-   
     if (data.type === 'task_created' && data.task) {
-      setTasks(prev => [data.task, ...prev]);
-      showToast("New Task", "New task has been created successfully");
+      setTasks(prev => [data.task, ...prev])
+      showToast("New Task", "New task has been created successfully")
     }
-  });
+  })
 
   // Task-specific WebSocket - reinitialize when selectedTask changes
   const { sendMessage: sendTaskMessage } = useWebSocket(
     selectedTask ? `/ws/task/${selectedTask.id}/` : null,
     (data) => {
-      console.log('Task WebSocket message:', data);
-      
       if (data.type === 'chat_message' && data.message) {
-      // Add new chat message to the chat in real-time
-      // Remove ONLY the matching optimistic temp message, not the whole history
-      setChatMessages(prev => {
-        const filtered = prev.filter(
-          msg => !(msg.id > 1000000 && msg.message === data.message.message)
-        );
-        return [...filtered, data.message];
-      });
-
-      // Auto-scroll to bottom
-      setTimeout(() => {
-        chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }, 100);
-    }
-
-     
-      if (data.type === 'user_typing') {
-        // Handle typing indicators
-        if (data.username !== currentUser?.username) {
-          setIsTyping(data.is_typing);
-        }
+        setChatMessages(prev => {
+          const filtered = prev.filter(msg => !(msg.id > 1000000 && msg.message === data.message.message))
+          return [...filtered, data.message]
+        })
+        setTimeout(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, 100)
       }
-     
-      // Handle task updates from other users
+      if (data.type === 'user_typing') {
+        if (data.username !== currentUser?.username) setIsTyping(data.is_typing)
+      }
       if (data.type === 'task_updated' && data.task) {
-        setTasks(prev => prev.map(task =>
-          task.id === data.task.id ? { ...task, ...data.task } : task
-        ));
-        if (selectedTask && selectedTask.id === data.task.id) {
-          setSelectedTask(prev => ({ ...prev, ...data.task }));
-        }
+        setTasks(prev => prev.map(task => task.id === data.task.id ? { ...task, ...data.task } : task))
+        if (selectedTask && selectedTask.id === data.task.id) setSelectedTask(prev => ({ ...prev!, ...data.task }))
       }
     },
     [selectedTask?.id]
-  );
+  )
 
+  useEffect(() => { loadInitialData() }, [])
+  useEffect(() => { if (selectedTask) loadChatMessages(selectedTask.id) }, [selectedTask?.id])
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [chatMessages])
 
-  // Load initial data
-  useEffect(() => {
-    loadInitialData()
-  }, [])
-  // Load chat messages when selected task changes
-  useEffect(() => {
-    if (selectedTask) {
-      loadChatMessages(selectedTask.id);
-    }
-  }, [selectedTask?.id])
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [chatMessages])
   const loadInitialData = async () => {
     try {
       setLoading(true)
-     
-      // Load current user
       const userData = await apiService.get<any>('/api/auth/user/')
       setCurrentUser(userData)
-      // Load tasks
       const tasksData = await apiService.get<any[]>('/api/tasks/')
       setTasks(tasksData)
-      if (tasksData.length > 0) {
-        setSelectedTask(tasksData[0])
-      }
+      if (tasksData.length > 0) setSelectedTask(tasksData[0])
       showToast("Dashboard Loaded", "Your dashboard has been loaded successfully")
     } catch (error) {
       console.error('Failed to load data:', error)
@@ -253,180 +180,107 @@ export default function ClientDashboard() {
       setLoading(false)
     }
   }
+
   const loadChatMessages = async (taskId: number) => {
     try {
       const messages = await apiService.get<any[]>(`/api/tasks/${taskId}/chat/`)
       setChatMessages(messages)
-     
-      setTimeout(() => {
-        chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }, 100);
+      setTimeout(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, 100)
     } catch (error) {
       console.error('Failed to load chat messages:', error)
       showToast("Error", "Failed to load chat messages", "destructive")
     }
   }
+
   const handleTyping = (typing: boolean) => {
     if (selectedTask && sendTaskMessage) {
-      sendTaskMessage({
-        type: 'typing',
-        is_typing: typing
-      });
+      sendTaskMessage({ type: 'typing', is_typing: typing })
     }
-  };
+  }
+
   const handleMessageInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setNewMessage(e.target.value);
-   
-    // Handle typing indicators
-    if (!isTyping) {
-      setIsTyping(true);
-      handleTyping(true);
-    }
-   
-    // Clear existing timeout
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
-    }
-   
-    // Set timeout to stop typing indicator
-    typingTimeoutRef.current = setTimeout(() => {
-      setIsTyping(false);
-      handleTyping(false);
-    }, 1000);
-  };
-const handleKeyPress = (e: React.KeyboardEvent) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    if (newMessage.trim()) {
-      sendMessage()
+    setNewMessage(e.target.value)
+    if (!isTyping) { setIsTyping(true); handleTyping(true) }
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
+    typingTimeoutRef.current = setTimeout(() => { setIsTyping(false); handleTyping(false) }, 1000)
+  }
+
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      if (newMessage.trim()) sendMessage()
     }
   }
-}
 
-const sendMessage = async () => {
-  if (!newMessage.trim() && uploadedFiles.length === 0) return;
-  if (!selectedTask) return;
+  const sendMessage = async () => {
+    if (!newMessage.trim() && uploadedFiles.length === 0) return
+    if (!selectedTask) return
+    try {
+      setIsTyping(false)
+      handleTyping(false)
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
 
-  try {
-    console.log('Sending message:', newMessage);
-
-    // Stop typing indicator
-    setIsTyping(false);
-    handleTyping(false);
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
-    }
-
-    if (uploadedFiles.length > 0) {
-      const formData = new FormData();
-      if (newMessage.trim()) {
-        formData.append('message', newMessage.trim());
+      if (uploadedFiles.length > 0) {
+        const formData = new FormData()
+        if (newMessage.trim()) formData.append('message', newMessage.trim())
+        uploadedFiles.forEach(file => formData.append('file', file))
+        await apiService.postFormData(`/api/tasks/${selectedTask.id}/chat/`, formData)
+      } else {
+        await apiService.post(`/api/tasks/${selectedTask.id}/chat/`, { message: newMessage.trim() })
       }
-      uploadedFiles.forEach(file => {
-        formData.append('file', file);
-      });
-      await apiService.postFormData(`/api/tasks/${selectedTask.id}/chat/`, formData);
-    } else {
-      await apiService.post(`/api/tasks/${selectedTask.id}/chat/`, {
-        message: newMessage.trim(),
-      });
+
+      setNewMessage('')
+      setUploadedFiles([])
+    } catch (error: any) {
+      console.error('Failed to send message:', error)
+      showToast("Error", "Failed to send message: " + error.message, "destructive")
     }
-
-    // DO NOT touch chatMessages here – WebSocket will add the real message
-    setNewMessage('');
-    setUploadedFiles([]);
-
-  } catch (error: any) {
-    console.error('Failed to send message:', error);
-    showToast("Error", "Failed to send message: " + error.message, "destructive");
   }
-};
-
-
-
 
   const refreshChat = () => {
     if (selectedTask) {
-      loadChatMessages(selectedTask.id);
-      showToast("Chat Refreshed", "Chat messages have been refreshed");
+      loadChatMessages(selectedTask.id)
+      showToast("Chat Refreshed", "Chat messages have been refreshed")
     }
-  };
+  }
 
   const createTask = async (e: React.FormEvent) => {
-    e.preventDefault();
-
+    e.preventDefault()
     try {
-      const formData = new FormData();
+      const formData = new FormData()
+      formData.append('title', taskForm.title)
+      formData.append('description', taskForm.description)
+      formData.append('subject', taskForm.subject)
+      formData.append('education_level', taskForm.education_level)
+      formData.append('deadline', taskForm.deadline)
+      formData.append('timezone_str', taskForm.timezone)
+      formData.append('proposed_budget', taskForm.budget)
+      if (uploadedFiles.length > 0) uploadedFiles.forEach((file) => formData.append('file', file))
 
-      // Append all text fields
-      formData.append('title', taskForm.title);
-      formData.append('description', taskForm.description);
-      formData.append('subject', taskForm.subject);
-      formData.append('education_level', taskForm.education_level);
-      formData.append('deadline', taskForm.deadline);
-      formData.append('timezone_str', taskForm.timezone);
-      formData.append('proposed_budget', taskForm.budget);
-
-      // Append files ONLY if present (optional)
-      if (uploadedFiles.length > 0) {
-        uploadedFiles.forEach((file) => {
-          formData.append('file', file);
-        });
-      }
-
-      const newTask = await apiService.postFormData<any>('/api/tasks/', formData);
-
-      setTasks(prev => [newTask, ...prev]);
-      setSelectedTask(newTask);
-      setShowCreateTask(false);
+      const newTask = await apiService.postFormData<any>('/api/tasks/', formData)
+      setTasks(prev => [newTask, ...prev])
+      setSelectedTask(newTask)
+      setShowCreateTask(false)
       setTaskForm({
-        title: '',
-        description: '',
-        subject: '',
-        education_level: '',
-        deadline: '',
-        timezone: 'America/New_York',
-        budget: ''
-      });
-      setUploadedFiles([]);
-
-      showToast("Success", "Task Submitted Successfully!");
+        title: '', description: '', subject: '', education_level: '', deadline: '', timezone: 'America/New_York', budget: ''
+      })
+      setUploadedFiles([])
+      showToast("Success", "Task Submitted Successfully!")
     } catch (error: any) {
-      console.error('Create task failed:', error);
-      showToast("Error", "Failed: " + (error.message || 'Please try again'), "destructive");
+      console.error('Create task failed:', error)
+      showToast("Error", "Failed: " + (error.message || 'Please try again'), "destructive")
     }
-  };
-
+  }
 
   const withdrawTask = async () => {
     if (!selectedTask) return
-   
     try {
-      const result = await apiService.post<{task: any, message: string}>(`/api/tasks/${selectedTask.id}/withdraw/`, {
-        reason: withdrawalReason
-      });
-     
-      setTasks(prev => prev.map(task =>
-        task.id === selectedTask.id
-          ? {
-              ...task,
-              status: result.task.status,
-              withdrawal_reason: result.task.withdrawal_reason
-            }
-          : task
-      ))
-     
-      setSelectedTask(prev => prev ? {
-        ...prev,
-        status: result.task.status,
-        withdrawal_reason: result.task.withdrawal_reason
-      } : null)
-     
+      const result = await apiService.post<{task: any, message: string}>(`/api/tasks/${selectedTask.id}/withdraw/`, { reason: withdrawalReason })
+      setTasks(prev => prev.map(task => task.id === selectedTask.id ? { ...task, status: result.task.status, withdrawal_reason: result.task.withdrawal_reason } : task))
+      setSelectedTask(prev => prev ? { ...prev, status: result.task.status, withdrawal_reason: result.task.withdrawal_reason } : null)
       setShowWithdrawModal(false)
       setWithdrawalReason('')
-     
       showToast("Success", result.message)
-     
     } catch (error: any) {
       console.error('Failed to withdraw task:', error)
       showToast("Error", "Failed to withdraw task: " + error.message, "destructive")
@@ -435,212 +289,109 @@ const sendMessage = async () => {
 
   const respondToBudgetNegotiation = async (action: 'accept' | 'counter' | 'reject') => {
     if (!selectedTask) return
-   
     try {
       if (action === 'accept') {
-        const result = await apiService.post<{task: any, message: string}>(`/api/tasks/${selectedTask.id}/accept-budget/`);
-       
-        setTasks(prev => prev.map(task =>
-          task.id === selectedTask.id
-            ? {
-                ...task,
-                budget: result.task.budget,
-                negotiation_status: result.task.negotiation_status,
-                status: result.task.status,
-                admin_counter_budget: undefined,
-                negotiation_reason: undefined
-              }
-            : task
-        ))
-       
-        setSelectedTask(prev => prev ? {
-          ...prev,
-          budget: result.task.budget,
-          negotiation_status: result.task.negotiation_status,
-          status: result.task.status,
-          admin_counter_budget: undefined,
-          negotiation_reason: undefined
-        } : null)
-       
+        const result = await apiService.post<{task: any, message: string}>(`/api/tasks/${selectedTask.id}/accept-budget/`)
+        setTasks(prev => prev.map(task => task.id === selectedTask.id ? {
+          ...task, budget: result.task.budget, negotiation_status: result.task.negotiation_status, status: result.task.status, admin_counter_budget: undefined, negotiation_reason: undefined
+        } : task))
+        setSelectedTask(prev => prev ? { ...prev, budget: result.task.budget, negotiation_status: result.task.negotiation_status, status: result.task.status, admin_counter_budget: undefined, negotiation_reason: undefined } : null)
         setShowBudgetNegotiation(false)
         setCounterBudget('')
         showToast("Success", result.message)
-       
       } else if (action === 'counter') {
-        if (!counterBudget || counterBudget.trim() === '') {
-          showToast("Error", "Please enter a counter budget amount.", "destructive");
-          return;
-        }
-       
-        const counterAmount = parseFloat(counterBudget);
-        if (isNaN(counterAmount) || counterAmount <= 0) {
-          showToast("Error", "Please enter a valid budget amount (greater than 0).", "destructive");
-          return;
-        }
-       
-        const result = await apiService.post<{task: any, message: string}>(`/api/tasks/${selectedTask.id}/counter-budget/`, {
-          amount: counterAmount
-        });
-       
-        setTasks(prev => prev.map(task =>
-          task.id === selectedTask.id
-            ? {
-                ...task,
-                proposed_budget: result.task.proposed_budget,
-                negotiation_status: result.task.negotiation_status,
-                status: result.task.status
-              }
-            : task
-        ))
-       
-        setSelectedTask(prev => prev ? {
-          ...prev,
-          proposed_budget: result.task.proposed_budget,
-          negotiation_status: result.task.negotiation_status,
-          status: result.task.status
-        } : null)
-       
+        if (!counterBudget?.trim()) { showToast("Error", "Please enter a counter budget amount.", "destructive"); return }
+        const counterAmount = parseFloat(counterBudget)
+        if (!Number.isFinite(counterAmount) || counterAmount <= 0) { showToast("Error", "Please enter a valid budget amount (greater than 0).", "destructive"); return }
+        const result = await apiService.post<{task: any, message: string}>(`/api/tasks/${selectedTask.id}/counter-budget/`, { amount: counterAmount })
+        setTasks(prev => prev.map(task => task.id === selectedTask.id ? {
+          ...task, proposed_budget: result.task.proposed_budget, negotiation_status: result.task.negotiation_status, status: result.task.status
+        } : task))
+        setSelectedTask(prev => prev ? { ...prev, proposed_budget: result.task.proposed_budget, negotiation_status: result.task.negotiation_status, status: result.task.status } : null)
         setShowBudgetNegotiation(false)
         setCounterBudget('')
         showToast("Success", result.message)
-       
       } else if (action === 'reject') {
-        const result = await apiService.post<{task: any, message: string}>(`/api/tasks/${selectedTask.id}/reject-budget/`);
-       
-        setTasks(prev => prev.map(task =>
-          task.id === selectedTask.id
-            ? {
-                ...task,
-                negotiation_status: result.task.negotiation_status,
-                status: result.task.status
-              }
-            : task
-        ))
-       
-        setSelectedTask(prev => prev ? {
-          ...prev,
-          negotiation_status: result.task.negotiation_status,
-          status: result.task.status
-        } : null)
-       
+        const result = await apiService.post<{task: any, message: string}>(`/api/tasks/${selectedTask.id}/reject-budget/`)
+        setTasks(prev => prev.map(task => task.id === selectedTask.id ? {
+          ...task, negotiation_status: result.task.negotiation_status, status: result.task.status
+        } : task))
+        setSelectedTask(prev => prev ? { ...prev, negotiation_status: result.task.negotiation_status, status: result.task.status } : null)
         setShowBudgetNegotiation(false)
         setCounterBudget('')
         showToast("Info", result.message)
       }
-     
     } catch (error: any) {
       console.error('Failed to respond to budget negotiation:', error)
       showToast("Error", "Failed to process your request: " + error.message, "destructive")
     }
   }
 
-const approveTask = async () => {
-  if (!window.confirm("Approve and complete this assignment?")) return;
-  try {
-    setLoading(true);
-    const result = await apiService.post<{task: any, message: string}>(`/api/tasks/${selectedTask!.id}/approve/`);
-    
-    // Update state
-    setTasks(prev => prev.map(task =>
-      task.id === selectedTask!.id
-        ? { ...task, status: result.task.status }
-        : task
-    ));
-    
-    setSelectedTask(prev => prev ? { ...prev, status: result.task.status } : null);
-    
-    showToast("Success", result.message);
-  } catch (err: any) {
-    console.error('Failed to approve task:', err);
-    showToast("Error", "Failed to approve task: " + err.message, "destructive");
-  } finally {
-    setLoading(false);
+  const approveTask = async () => {
+    if (!window.confirm("Approve and complete this assignment?")) return
+    try {
+      setLoading(true)
+      const result = await apiService.post<{task: any, message: string}>(`/api/tasks/${selectedTask!.id}/approve/`)
+      setTasks(prev => prev.map(task => task.id === selectedTask!.id ? { ...task, status: result.task.status } : task))
+      setSelectedTask(prev => prev ? { ...prev, status: result.task.status } : null)
+      showToast("Success", result.message)
+    } catch (err: any) {
+      console.error('Failed to approve task:', err)
+      showToast("Error", "Failed to approve task: " + err.message, "destructive")
+    } finally {
+      setLoading(false)
+    }
   }
-};
 
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
-const MAX_FILES = 10;
+  const MAX_FILE_SIZE = 10 * 1024 * 1024
+  const MAX_FILES = 10
 
-const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-  const files = Array.from(e.target.files || []);
-  
-  setUploadedFiles(prev => {
-    const remainingSlots = MAX_FILES - prev.length;
-    const accepted: File[] = [];
-    let tooMany = false;
-    let tooLargeFiles: string[] = [];
-
-    for (const file of files) {
-      if (accepted.length >= remainingSlots) {
-        tooMany = true;
-        break;
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || [])
+    setUploadedFiles(prev => {
+      const remaining = MAX_FILES - prev.length
+      const accepted: File[] = []
+      let tooMany = false
+      const tooLarge: string[] = []
+      for (const file of files) {
+        if (accepted.length >= remaining) { tooMany = true; break }
+        if (file.size > MAX_FILE_SIZE) { tooLarge.push(file.name); continue }
+        accepted.push(file)
       }
-
-      if (file.size > MAX_FILE_SIZE) {
-        tooLargeFiles.push(file.name);
-        continue;
-      }
-
-      accepted.push(file);
-    }
-
-    if (tooLargeFiles.length > 0) {
-      showToast(
-        "File too large",
-        `${tooLargeFiles.join(', ')} exceed(s) 10 MB and was not added.`,
-        "destructive"
-      );
-    }
-
-    if (tooMany) {
-      showToast(
-        "File limit reached",
-        `You can attach up to ${MAX_FILES} files per assignment.`,
-        "destructive"
-      );
-    }
-
-    return [...prev, ...accepted];
-  });
-
-  // reset input so same file can be selected again later if needed
-  e.target.value = "";
-};
-
-  const removeFile = (index: number) => {
-    setUploadedFiles(prev => prev.filter((_, i) => i !== index))
+      if (tooLarge.length) showToast("File too large", `${tooLarge.join(', ')} exceed(s) 10 MB and was not added.`, "destructive")
+      if (tooMany) showToast("File limit reached", `You can attach up to ${MAX_FILES} files per assignment.`, "destructive")
+      return [...prev, ...accepted]
+    })
+    e.target.value = ""
   }
+
+  const removeFile = (index: number) => { setUploadedFiles(prev => prev.filter((_, i) => i !== index)) }
+
   const downloadFile = async (file: any) => {
     try {
       if (file.file_url) {
-        window.open(file.file_url, '_blank');
+        window.open(file.file_url, '_blank')
       } else {
-        const token = localStorage.getItem('access_token');
-        const response = await fetch(`${API_BASE}/files/${file.id}/download/`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-          },
-        });
-       
-        if (!response.ok) {
-          throw new Error('Download failed');
-        }
-       
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = file.name || 'download';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        window.URL.revokeObjectURL(url);
+        const token = localStorage.getItem('access_token') || ""
+        const url = joinUrl(API_BASE, `/files/${file.id}/download/`)
+        const response = await fetch(url, { headers: token ? { 'Authorization': `Bearer ${token}` } : undefined })
+        if (!response.ok) throw new Error('Download failed')
+        const blob = await response.blob()
+        const objUrl = window.URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = objUrl
+        link.download = file.name || 'download'
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        window.URL.revokeObjectURL(objUrl)
       }
     } catch (error) {
-      console.error('Failed to download file:', error);
-      showToast("Error", "Failed to download file. Please try again.", "destructive");
+      console.error('Failed to download file:', error)
+      showToast("Error", "Failed to download file. Please try again.", "destructive")
     }
   }
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'submitted': return 'bg-amber-100 text-amber-800 border-amber-200'
@@ -654,16 +405,16 @@ const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
       default: return 'bg-gray-100 text-gray-800 border-gray-200'
     }
   }
+
   const formatStatus = (status: string) => {
     const statusMap: any = {
       'budget_negotiation': 'Budget Negotiation',
       'revision_requested': 'Revision Requested',
       'budget_rejected': 'Budget Rejected'
     }
-    return statusMap[status] || status.split('_').map(word =>
-      word.charAt(0).toUpperCase() + word.slice(1)
-    ).join(' ')
+    return statusMap[status] || status.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
   }
+
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'submitted': return 'ri-file-text-line'
@@ -677,8 +428,9 @@ const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
       default: return 'ri-file-line'
     }
   }
+
   const getFileIcon = (type: string) => {
-    switch (type.toLowerCase()) {
+    switch ((type || "").toLowerCase()) {
       case 'pdf': return 'ri-file-pdf-line'
       case 'word':
       case 'docx':
@@ -695,12 +447,14 @@ const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
       default: return 'ri-file-line'
     }
   }
+
   const filteredTasks = tasks.filter((task: any) => {
     const matchesStatus = filterStatus === 'all' || task.status === filterStatus
     const matchesSearch = task.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         task.subject.toLowerCase().includes(searchQuery.toLowerCase())
+                          task.subject.toLowerCase().includes(searchQuery.toLowerCase())
     return matchesStatus && matchesSearch
   })
+
   const taskStats = {
     total: tasks.length,
     submitted: tasks.filter((t: any) => t.status === 'submitted').length,
@@ -709,50 +463,37 @@ const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     completed: tasks.filter((t: any) => t.status === 'completed').length,
     budget_negotiation: tasks.filter((t: any) => t.status === 'budget_negotiation').length
   }
+
   const canWithdraw = (task: any) => {
     return task.status === 'submitted' || task.status === 'budget_negotiation' || (task.status === 'in_progress' && new Date() < new Date(task.withdrawal_deadline))
   }
 
+  const requestRevision = async () => {
+    if (!revisionFeedback?.trim()) { showToast("Required", "Add feedback", "destructive"); return }
+    try {
+      setLoading(true)
+      const result = await apiService.post<{task: any, message: string}>(`/api/tasks/${selectedTask!.id}/request-revision/`, { feedback: revisionFeedback.trim() })
+      setTasks(prev => prev.map(task => task.id === selectedTask!.id ? { ...task, status: result.task.status } : task))
+      setSelectedTask(prev => prev ? { ...prev, status: result.task.status } : null)
+      setShowRevisionModal(false)
+      setRevisionFeedback('')
+      showToast("Success", result.message)
+    } catch (err: any) {
+      console.error('Failed to request revision:', err)
+      showToast("Error", "Failed to request revision: " + err.message, "destructive")
+    } finally {
+      setLoading(false)
+    }
+  }
 
-const requestRevision = async () => {
-  if (!revisionFeedback?.trim()) {
-    showToast("Required", "Add feedback", "destructive");
-    return;
-  }
-  try {
-    setLoading(true);
-    const result = await apiService.post<{task: any, message: string}>(`/api/tasks/${selectedTask!.id}/request-revision/`, {
-      feedback: revisionFeedback.trim()
-    });
-    
-    // Update state
-    setTasks(prev => prev.map(task =>
-      task.id === selectedTask!.id
-        ? { ...task, status: result.task.status }
-        : task
-    ));
-    
-    setSelectedTask(prev => prev ? { ...prev, status: result.task.status } : null);
-    setShowRevisionModal(false);
-    setRevisionFeedback('');
-    
-    showToast("Success", result.message);
-  } catch (err: any) {
-    console.error('Failed to request revision:', err);
-    showToast("Error", "Failed to request revision: " + err.message, "destructive");
-  } finally {
-    setLoading(false);
-  }
-};
+  const canApprove = (task: any) => task.status === 'awaiting_review'
 
-  const canApprove = (task: any) => {
-    return task.status === 'awaiting_review'
-  }
   const handleLogout = () => {
     logout()
     navigate('/')
     showToast("Logged out", "You have been successfully logged out.")
   }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 flex items-center justify-center">
@@ -763,17 +504,13 @@ const requestRevision = async () => {
       </div>
     )
   }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
       {/* Toast Notification */}
-      {currentToast && (
-        <Toast
-          title={currentToast.title}
-          description={currentToast.description}
-          variant={currentToast.variant}
-        />
-      )}
-      {/* Modern Header */}
+      {currentToast && <Toast title={currentToast.title} description={currentToast.description} variant={currentToast.variant} />}
+
+      {/* Header */}
       <header className="bg-white/90 backdrop-blur-xl border-b border-gray-200 sticky top-0 z-40 shadow-lg">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-20">
@@ -802,11 +539,7 @@ const requestRevision = async () => {
                 {currentUser?.profile?.avatar && (
                   <img src={currentUser.profile.avatar} alt={currentUser.full_name} className="w-12 h-12 rounded-full object-cover object-top border-3 border-blue-200 shadow-lg" />
                 )}
-                <Button
-                  onClick={handleLogout}
-                  variant="outline"
-                  className="whitespace-nowrap hover:bg-gray-100 border-gray-300"
-                >
+                <Button onClick={handleLogout} variant="outline" className="whitespace-nowrap hover:bg-gray-100 border-gray-300">
                   <i className="ri-logout-box-line mr-2"></i>
                   Sign Out
                 </Button>
